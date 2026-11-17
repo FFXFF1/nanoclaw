@@ -249,7 +249,11 @@ export class CellLink {
       const frame = mux.receive(event.data);
       if (frame) this.handleFrame(mux, frame);
     });
-    socket.addEventListener('error', () => {});
+    socket.addEventListener('error', () => {
+      if (this.socket !== socket || this.connected) return;
+      this.log({ event: 'handshake_error' });
+      this.drop(socket);
+    });
     socket.addEventListener('close', (event) => this.drop(socket, event.code));
   }
 

@@ -31,6 +31,9 @@ class FakeSocket implements LinkSocket {
     this.readyState = 1;
     this.emit('open');
   }
+  fail(): void {
+    this.emit('error');
+  }
   message(data: unknown): void {
     this.emit('message', { data });
   }
@@ -249,6 +252,30 @@ it('gives up on a handshake that does not open in time and reconnects', async ()
   expect(link.connected).toBe(true);
 });
 
+it('retries a handshake error without waiting for close or the handshake deadline', async () => {
+  vi.useFakeTimers();
+  const { link, log, getTicket } = connect({ handshakeMs: 500, backoffBaseMs: 100, backoffCapMs: 100 });
+  link.start();
+  await settle();
+
+  const first = FakeSocket.instances[0];
+  first.fail();
+  expect(first.closed).toBe(true);
+  expect(log).toHaveBeenCalledExactlyOnceWith({ event: 'handshake_error' });
+
+  await vi.advanceTimersByTimeAsync(100);
+  expect(getTicket).toHaveBeenCalledTimes(2);
+  expect(FakeSocket.instances).toHaveLength(2);
+  const second = FakeSocket.instances[1];
+  second.open();
+  first.lost(1006);
+
+  await vi.advanceTimersByTimeAsync(500);
+  expect(getTicket).toHaveBeenCalledTimes(2);
+  expect(link.connected).toBe(true);
+  expect(log).not.toHaveBeenCalledWith({ event: 'handshake_timeout' });
+});
+
 it('reconnects after the cell closes the connection, resetting the backoff after a stable session', async () => {
   vi.useFakeTimers();
   const { link, log } = connect({ backoffBaseMs: 100, backoffCapMs: 1_000, random: () => 1 });
@@ -296,6 +323,8 @@ it('reconnects on 4401 and 4008/4009 (logging the latter as a bug) and stops on 
   expect(FakeSocket.instances).toHaveLength(3);
   const third = FakeSocket.instances[2];
   third.open();
+  third.fail();
+  expect(link.connected).toBe(true);
   third.lost(CLOSE_FORBIDDEN);
   expect(onForbidden).toHaveBeenCalledOnce();
   expect(log).toHaveBeenCalledWith({ event: 'forbidden' });
